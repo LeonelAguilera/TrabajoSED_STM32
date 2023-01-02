@@ -31,7 +31,7 @@ enum MODO {Manual = 0, Automatico_Humedad, Automatico_Tiempo};
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ADC_HUMEDAD_MAX 860
+#define ADC_HUMEDAD_MAX 850
 #define ADC_HUMEDAD_MIN 735
 /* USER CODE END PD */
 
@@ -233,7 +233,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
   */
-  sConfig.Channel = ADC_CHANNEL_3;
+  sConfig.Channel = ADC_CHANNEL_1;
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
@@ -319,8 +319,8 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PA0 PA1 PA2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
+  /*Configure GPIO pins : PA0 PA2 PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_2|GPIO_PIN_3;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
@@ -333,11 +333,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
   HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
 }
 
@@ -403,14 +406,17 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if(GPIO_Pin==GPIO_PIN_0){
 		//button0 = 1;
 		modo = Manual;
-	}
-	if(GPIO_Pin==GPIO_PIN_1){
-		//button1 = 1;
-		modo = Automatico_Humedad;
+		CerrarValvula();
 	}
 	if(GPIO_Pin==GPIO_PIN_2){
+		//button1 = 1;
+		modo = Automatico_Humedad;
+		CerrarValvula();
+	}
+	if(GPIO_Pin==GPIO_PIN_3){
  		//button2 = 1;
 		modo = Automatico_Tiempo;
+		CerrarValvula();
 	}
 
 	last_press = HAL_GetTick()+50;
@@ -444,7 +450,7 @@ void LED_ON_OFF(uint8_t humedad)
 	else{
 		uint8_t R = 0;
 		uint8_t G = (100-humedad)*127/(100-humedad_maxima);
-		uint8_t B = 127+((humedad-humedad_maxima)/(100-humedad_maxima));
+		uint8_t B = 127+((humedad-humedad_maxima)*127/(100-humedad_maxima));
 		WriteRGB(R, G, B);
 	}
 
