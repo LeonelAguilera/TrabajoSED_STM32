@@ -26,12 +26,12 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+enum MODO {Manual = 0, Automatico_Humedad, Automatico_Tiempo};
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ADC_HUMEDAD_MAX 870
+#define ADC_HUMEDAD_MAX 860
 #define ADC_HUMEDAD_MIN 735
 /* USER CODE END PD */
 
@@ -43,18 +43,34 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+TIM_HandleTypeDef htim4;
+
 /* USER CODE BEGIN PV */
-uint8_t humedad;
+enum MODO modo;
+uint8_t humedad_minima = 40;
+uint8_t humedad_maxima = 60;
+uint8_t humedad_media = 50;
+
+uint8_t button0 = 0;
+uint8_t button1 = 0;
+uint8_t button2 = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
+void Led_Init();
 uint8_t sensorHumedad();
 void AbrirValvula();
 void CerrarValvula();
+void ControlManual();
+void ControlAutomatico_Humedad(uint8_t humedad);
+void ControlAutomatico_Tiempo();
+void LED_ON_OFF(uint8_t humedad);
+void WriteRGB(uint8_t R, uint8_t G, uint8_t B);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -91,8 +107,16 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_ADC1_Init();
+  MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
+  Led_Init();
+  for(uint8_t k = 0; k <=100; k++){
+	  LED_ON_OFF(k);
+	  HAL_Delay(50);
+  }
 
+
+  uint8_t humedad = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -100,12 +124,23 @@ int main(void)
   while (1)
   {
 	  humedad = sensorHumedad();
-	  if (humedad > 60){
-		  CerrarValvula();
+
+	  switch(modo){
+	  case Manual:
+		  ControlManual();
+		  break;
+	  case Automatico_Humedad:
+		  ControlAutomatico_Humedad(humedad);
+		  break;
+	  case Automatico_Tiempo:
+		  ControlAutomatico_Tiempo();
+		  break;
+	  default:
+		  modo = Manual;
+		  break;
 	  }
-	  else if(humedad < 40){
-		  AbrirValvula();
-	  }
+
+	  LED_ON_OFF(humedad);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -212,6 +247,63 @@ static void MX_ADC1_Init(void)
 }
 
 /**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 1599;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 255;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+  HAL_TIM_MspPostInit(&htim4);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -227,6 +319,12 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
 
+  /*Configure GPIO pins : PA0 PA1 PA2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /*Configure GPIO pin : PD15 */
   GPIO_InitStruct.Pin = GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -234,9 +332,44 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
 }
 
 /* USER CODE BEGIN 4 */
+void Led_Init(){
+	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
+	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+}
+
+//	Control manual de riego
+void ControlManual()
+{
+
+}
+//	Control automático de riego basado en la humedad de la tierra
+void ControlAutomatico_Humedad(uint8_t humedad)
+{
+	if (humedad > humedad_maxima){
+		CerrarValvula();
+	}
+	else if(humedad < humedad_minima){
+		AbrirValvula();
+	}
+}
+
+//	Control automático de riego basado en tiempo
+void ControlAutomatico_Tiempo()
+{
+
+}
+
 uint8_t sensorHumedad(){
 	uint8_t valor_porc_sens = 0;
 	HAL_ADC_Start(&hadc1);
@@ -244,6 +377,7 @@ uint8_t sensorHumedad(){
 	if (HAL_ADC_PollForConversion(&hadc1,HAL_MAX_DELAY)==HAL_OK)
 	{
 		uint16_t ADC_val=HAL_ADC_GetValue(&hadc1);
+		ADC_val = ADC_val > ADC_HUMEDAD_MAX ? ADC_HUMEDAD_MAX : ADC_val < ADC_HUMEDAD_MIN ? ADC_HUMEDAD_MIN : ADC_val;
 		valor_porc_sens=100-(((ADC_val-ADC_HUMEDAD_MIN)*100)/(ADC_HUMEDAD_MAX-ADC_HUMEDAD_MIN));
 	}
 	HAL_ADC_Stop(&hadc1);
@@ -256,6 +390,71 @@ void AbrirValvula(){
 
 void CerrarValvula(){
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15,0);
+}
+
+//	Interrupción de botones
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	static uint32_t last_press = 0;
+	if(HAL_GetTick() < last_press){
+		return;
+	}
+
+	if(GPIO_Pin==GPIO_PIN_0){
+		//button0 = 1;
+		modo = Manual;
+	}
+	if(GPIO_Pin==GPIO_PIN_1){
+		//button1 = 1;
+		modo = Automatico_Humedad;
+	}
+	if(GPIO_Pin==GPIO_PIN_2){
+ 		//button2 = 1;
+		modo = Automatico_Tiempo;
+	}
+
+	last_press = HAL_GetTick()+50;
+}
+//	Encendido de led
+void LED_ON_OFF(uint8_t humedad)
+{
+	static uint32_t last_time = 0;
+	if(HAL_GetTick() < last_time + 100){
+		//return;
+	}
+
+	if(humedad < humedad_minima){
+		uint8_t R = 255-(humedad*128/humedad_minima);
+		uint8_t G = (humedad*127/humedad_minima);
+		uint8_t B = 0;
+		WriteRGB(R, G, B);
+	}
+	else if(humedad < humedad_media){
+		uint8_t R = 127-((humedad-humedad_minima)*127/(humedad_media-humedad_minima));
+		uint8_t G = 127+((humedad-humedad_minima)*128/(humedad_media-humedad_minima));
+		uint8_t B = 0;
+		WriteRGB(R, G, B);
+	}
+	else if(humedad < humedad_maxima){
+		uint8_t R = 0;
+		uint8_t G = 127+((humedad_maxima-humedad)*128/(humedad_maxima-humedad_media));
+		uint8_t B = (humedad-humedad_media)*127/(humedad_maxima-humedad_media);
+		WriteRGB(R, G, B);
+	}
+	else{
+		uint8_t R = 0;
+		uint8_t G = (100-humedad)*127/(100-humedad_maxima);
+		uint8_t B = 127+((humedad-humedad_maxima)/(100-humedad_maxima));
+		WriteRGB(R, G, B);
+	}
+
+	last_time = HAL_GetTick();
+	//while(HAL_GetTick()-last_time < 100){};
+}
+void WriteRGB(uint8_t R, uint8_t G, uint8_t B){
+	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 255-R);
+	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 255-G);
+	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 255-B);
 }
 /* USER CODE END 4 */
 
