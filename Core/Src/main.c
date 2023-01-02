@@ -21,12 +21,15 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
+#include "st7735.h"
+#include "fonts.h"
+//#include "Menus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-enum MODO {Manual = 0, Automatico_Humedad, Automatico_Tiempo};
+typedef enum {Manual = 0, Automatico_Humedad, Automatico_Tiempo} MODO;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -43,10 +46,12 @@ enum MODO {Manual = 0, Automatico_Humedad, Automatico_Tiempo};
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+SPI_HandleTypeDef hspi1;
+
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
-enum MODO modo;
+MODO modo;
 uint8_t humedad_minima = 40;
 uint8_t humedad_maxima = 60;
 uint8_t humedad_media = 50;
@@ -61,6 +66,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM4_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 void Led_Init();
 uint8_t sensorHumedad();
@@ -71,6 +77,11 @@ void ControlAutomatico_Humedad(uint8_t humedad);
 void ControlAutomatico_Tiempo();
 void LED_ON_OFF(uint8_t humedad);
 void WriteRGB(uint8_t R, uint8_t G, uint8_t B);
+
+void printMenu_Start(MODO modo);
+void printMenu_CambioModo();
+
+void printSeleccion(uint8_t altura);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -108,13 +119,16 @@ int main(void)
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_TIM4_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
   Led_Init();
+  ST7735_Init();
+  /*
   for(uint8_t k = 0; k <=100; k++){
 	  LED_ON_OFF(k);
 	  HAL_Delay(50);
   }
-
+  */
 
   uint8_t humedad = 0;
   /* USER CODE END 2 */
@@ -141,6 +155,8 @@ int main(void)
 	  }
 
 	  LED_ON_OFF(humedad);
+	  printMenu_Start(modo);
+	  HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -247,6 +263,44 @@ static void MX_ADC1_Init(void)
 }
 
 /**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_1LINE;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
   * @brief TIM4 Initialization Function
   * @param None
   * @retval None
@@ -314,7 +368,14 @@ static void MX_GPIO_Init(void)
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4|GPIO_PIN_6, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);
@@ -324,6 +385,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA4 PA6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PD15 */
   GPIO_InitStruct.Pin = GPIO_PIN_15;
@@ -461,6 +536,37 @@ void WriteRGB(uint8_t R, uint8_t G, uint8_t B){
 	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 255-R);
 	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 255-G);
 	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, 255-B);
+}
+
+
+
+
+void printMenu_Start(MODO modo){
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 40, ST7735_WHITE);
+	switch(modo){
+	case Manual:
+		ST7735_WriteString(31, 16, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	case Automatico_Humedad:
+		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		ST7735_WriteString(25, 26, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	case Automatico_Tiempo:
+		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		ST7735_WriteString(31, 26, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	default:
+		ST7735_WriteString(36, 16, "Error", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	}
+}
+void printMenu_CambioModo(){
+	ST7735_FillScreenFast(ST7735_GREEN);
+}
+
+void printSeleccion(uint8_t altura){
+	ST7735_FillScreenFast(ST7735_RED);
 }
 /* USER CODE END 4 */
 
