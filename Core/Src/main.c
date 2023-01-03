@@ -22,14 +22,20 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
+#include <stdio.h>
 #include "st7735.h"
 #include "fonts.h"
+#include "testimg.h"
+#include <malloc.h>
 //#include "Menus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+RTC_TimeTypeDef sTime;
+RTC_DateTypeDef sDate;
 typedef enum {Manual = 0, Automatico_Humedad, Automatico_Tiempo} MODO;
+typedef enum {Estado = 0, Modo_Actual, Cambio_Modo, Ajustes_Auto_Tiempo, Ajustes_Auto_Humedad} PANTALLA;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -40,25 +46,51 @@ typedef enum {Manual = 0, Automatico_Humedad, Automatico_Tiempo} MODO;
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+RTC_HandleTypeDef hrtc;
+
 SPI_HandleTypeDef hspi1;
 
+TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 MODO modo;
+PANTALLA pantalla;
+
+uint8_t humedad_previa = 0;
+uint8_t humedad = 0;
+
 uint8_t humedad_minima = 40;
 uint8_t humedad_maxima = 60;
 uint8_t humedad_media = 50;
 
-uint8_t button0 = 0;
-uint8_t button1 = 0;
-uint8_t button2 = 0;
+bool button0 = 0;
+bool button1 = 0;
+bool button2 = 0;
+bool update_screen = 1;
+
+bool isTimeToTurnOn = 1;
+
+uint8_t seconds = 0;
+uint8_t minutes = 0;
+uint8_t hours = 0;
+
+uint8_t day = 0;
+uint8_t month = 0;
+uint16_t year = 0;
+
+RTC_TimeTypeDef* alarmasON = 0;
+RTC_TimeTypeDef* alarmasOFF = 0;
+
+uint32_t num_alarmas = 0;
+uint32_t siguiente_alarma = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -67,6 +99,8 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_RTC_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void Led_Init();
 uint8_t sensorHumedad();
@@ -78,10 +112,21 @@ void ControlAutomatico_Tiempo();
 void LED_ON_OFF(uint8_t humedad);
 void WriteRGB(uint8_t R, uint8_t G, uint8_t B);
 
-void printMenu_Start(MODO modo);
+void modoHandler();
+void menuHandler();
+
+void printMenu_Start();
 void printMenu_CambioModo();
 
 void printSeleccion(uint8_t altura);
+void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura);
+void printCrearAlarma(uint8_t altura);
+void printOK(uint8_t altura);
+void printMenu_Estado();
+void crearAlarma(RTC_TimeTypeDef* returnVal);
+void AjustarHumedad();
+
+void nextAlarma();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -120,7 +165,11 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM4_Init();
   MX_SPI1_Init();
+  MX_RTC_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start_IT(&htim3);
+  HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
   Led_Init();
   ST7735_Init();
   /*
@@ -130,7 +179,8 @@ int main(void)
   }
   */
 
-  uint8_t humedad = 0;
+  //uint32_t longtime = 0;
+  printMenu_Estado();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -139,24 +189,28 @@ int main(void)
   {
 	  humedad = sensorHumedad();
 
-	  switch(modo){
-	  case Manual:
-		  ControlManual();
-		  break;
-	  case Automatico_Humedad:
-		  ControlAutomatico_Humedad(humedad);
-		  break;
-	  case Automatico_Tiempo:
-		  ControlAutomatico_Tiempo();
-		  break;
-	  default:
-		  modo = Manual;
-		  break;
-	  }
+	  modoHandler();
+	  menuHandler();
 
 	  LED_ON_OFF(humedad);
-	  printMenu_Start(modo);
-	  HAL_Delay(1000);
+	  /*if(HAL_GetTick() > longtime){
+		  //printMenu_Start(modo);
+		  printMenu_CambioModo();
+		  longtime = HAL_GetTick() + 2000;
+	  }*/
+	  //HAL_Delay(1000);
+
+		HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+		HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+		///*
+		year = sDate.Year+2000;
+		month = sDate.Month;
+		day = sDate.Date;
+
+		hours = sTime.Hours;
+		minutes = sTime.Minutes;
+		seconds = sTime.Seconds;
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -181,14 +235,15 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 192;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+  RCC_OscInitStruct.PLL.PLLN = 96;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 8;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -263,6 +318,88 @@ static void MX_ADC1_Init(void)
 }
 
 /**
+  * @brief RTC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RTC_Init(void)
+{
+
+  /* USER CODE BEGIN RTC_Init 0 */
+
+  /* USER CODE END RTC_Init 0 */
+
+  RTC_TimeTypeDef sTime = {0};
+  RTC_DateTypeDef sDate = {0};
+  RTC_AlarmTypeDef sAlarm = {0};
+
+  /* USER CODE BEGIN RTC_Init 1 */
+
+  /* USER CODE END RTC_Init 1 */
+
+  /** Initialize RTC Only
+  */
+  hrtc.Instance = RTC;
+  hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
+  hrtc.Init.AsynchPrediv = 127;
+  hrtc.Init.SynchPrediv = 255;
+  hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
+  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+  hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN Check_RTC_BKUP */
+
+  /* USER CODE END Check_RTC_BKUP */
+
+  /** Initialize RTC and set the Time and Date
+  */
+  sTime.Hours = 0;
+  sTime.Minutes = 0;
+  sTime.Seconds = 0;
+  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sDate.WeekDay = RTC_WEEKDAY_MONDAY;
+  sDate.Month = RTC_MONTH_JANUARY;
+  sDate.Date = 1;
+  sDate.Year = 0;
+
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Enable the Alarm A
+  */
+  sAlarm.AlarmTime.Hours = 0;
+  sAlarm.AlarmTime.Minutes = 0;
+  sAlarm.AlarmTime.Seconds = 0;
+  sAlarm.AlarmTime.SubSeconds = 0;
+  sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+  sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+  sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
+  sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+  sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+  sAlarm.AlarmDateWeekDay = 1;
+  sAlarm.Alarm = RTC_ALARM_A;
+  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RTC_Init 2 */
+
+  /* USER CODE END RTC_Init 2 */
+
+}
+
+/**
   * @brief SPI1 Initialization Function
   * @param None
   * @retval None
@@ -297,6 +434,51 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 47999;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 8000;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 
 }
 
@@ -469,33 +651,6 @@ void AbrirValvula(){
 void CerrarValvula(){
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15,0);
 }
-
-//	Interrupción de botones
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-	static uint32_t last_press = 0;
-	if(HAL_GetTick() < last_press){
-		return;
-	}
-
-	if(GPIO_Pin==GPIO_PIN_0){
-		//button0 = 1;
-		modo = Manual;
-		CerrarValvula();
-	}
-	if(GPIO_Pin==GPIO_PIN_2){
-		//button1 = 1;
-		modo = Automatico_Humedad;
-		CerrarValvula();
-	}
-	if(GPIO_Pin==GPIO_PIN_3){
- 		//button2 = 1;
-		modo = Automatico_Tiempo;
-		CerrarValvula();
-	}
-
-	last_press = HAL_GetTick()+50;
-}
 //	Encendido de led
 void LED_ON_OFF(uint8_t humedad)
 {
@@ -539,9 +694,229 @@ void WriteRGB(uint8_t R, uint8_t G, uint8_t B){
 }
 
 
+//HANDLERS
+void modoHandler(){
+	switch(modo){
+	case Manual:
+		ControlManual();
+		break;
+	case Automatico_Humedad:
+		ControlAutomatico_Humedad(humedad);
+		break;
+	case Automatico_Tiempo:
+		ControlAutomatico_Tiempo();
+		break;
+	default:
+		modo = Manual;
+		break;
+	}
+}
+void menuHandler(){
+	static uint32_t seleccion = 0;
+	if(pantalla == Estado){
+		if((humedad < humedad_minima && !(humedad_previa < humedad_minima)) || (humedad > humedad_minima && !(humedad_previa > humedad_minima)) || (humedad < humedad_maxima && !(humedad_previa < humedad_maxima)) || (humedad > humedad_maxima && !(humedad_previa > humedad_maxima))){
+			update_screen = 1;
+		}
+		if(update_screen){
+			printMenu_Estado();
+			update_screen = 0;
+		}
+		return;
+		humedad_previa = humedad;
+	}
+	HAL_NVIC_DisableIRQ(EXTI0_IRQn);
+	HAL_NVIC_DisableIRQ(EXTI2_IRQn);
+	HAL_NVIC_DisableIRQ(EXTI3_IRQn);
+
+	switch(pantalla){
+	case Modo_Actual:
+		if(update_screen){
+			printMenu_Start();
+			update_screen = 0;
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			__HAL_TIM_SET_COUNTER(&htim3, 0);
+			pantalla = Cambio_Modo;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+		break;
+	case Cambio_Modo:
+		if(update_screen){
+			printMenu_CambioModo();
+			printSeleccion(seleccion);
+			update_screen = 0;
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			seleccion = seleccion==2?2:seleccion+1;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			seleccion = seleccion==0?0:seleccion-1;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			switch(seleccion){
+			case Automatico_Tiempo:
+				pantalla = Ajustes_Auto_Tiempo;
+				break;
+			case Automatico_Humedad:
+				pantalla = Ajustes_Auto_Humedad;
+				break;
+			default:
+				break;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+			seleccion = 0;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+		//HAL_Delay(50);
+		break;
+	case Ajustes_Auto_Tiempo:
+		if(update_screen){
+			ST7735_FillScreenFast(ST7735_CYAN);
+			if(alarmasON != 0)
+			{
+				for(uint8_t i = 0; i < MIN(num_alarmas-seleccion, 3); i++){
+					printAlarma(alarmasON[i], alarmasOFF[i], i);
+				}
+				if(num_alarmas-seleccion < 3){
+					printCrearAlarma(num_alarmas-seleccion);
+				}
+				if(num_alarmas-seleccion < 2){
+					printOK(num_alarmas-seleccion+1);
+				}
+			}
+			else
+			{
+				printCrearAlarma(0);
+			}
+			printSeleccion(0);
+			update_screen = 0;
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			seleccion = seleccion==num_alarmas?num_alarmas:seleccion+1;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			seleccion = seleccion==0?0:seleccion-1;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			if(seleccion >= num_alarmas + 1)
+			{
+				modo = Automatico_Tiempo;
+				pantalla = Estado;
+				printMenu_Estado();
+				HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+				HAL_NVIC_EnableIRQ(RTC_Alarm_IRQn);
+				nextAlarma();
+			}
+			else if(seleccion == num_alarmas)
+			{
+				RTC_TimeTypeDef nueva_alarma[2];
+				crearAlarma(nueva_alarma);
+				RTC_TimeTypeDef ON  = nueva_alarma[0];
+				RTC_TimeTypeDef OFF = nueva_alarma[1];
+
+				if(num_alarmas == 0){
+					alarmasON  = (RTC_TimeTypeDef*)malloc(sizeof(RTC_TimeTypeDef));
+					alarmasOFF = (RTC_TimeTypeDef*)malloc(sizeof(RTC_TimeTypeDef));
+
+					if(alarmasON == NULL || alarmasOFF == NULL){
+						Error_Handler();
+					}
+
+					alarmasON[0] = ON;
+					alarmasOFF[0] = OFF;
+
+					num_alarmas++;
+				}
+				else{
+					alarmasON = realloc(alarmasON, (num_alarmas+1)*sizeof(RTC_TimeTypeDef));
+					alarmasOFF = realloc(alarmasOFF, (num_alarmas+1)*sizeof(RTC_TimeTypeDef));
+
+					if(alarmasON == NULL || alarmasOFF == NULL){
+						Error_Handler();
+					}
+					alarmasON[num_alarmas] = ON;
+					alarmasOFF[num_alarmas] = OFF;
+
+					num_alarmas++;
+				}
+			}
+			else{
+				RTC_TimeTypeDef* alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
+				if(alarmasTemp == NULL){
+					Error_Handler();
+				}
+				for(uint32_t i = 0; i < num_alarmas-1; i++){
+					alarmasTemp[i] = alarmasON[i+((uint32_t)i>=seleccion)];
+				}
+				free(alarmasON);
+				alarmasON = alarmasTemp;
+
+				alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
+				if(alarmasTemp == NULL){
+					Error_Handler();
+				}
+				for(uint32_t i = 0; i < num_alarmas-1; i++){
+					alarmasTemp[i] = alarmasOFF[i+((uint32_t)i>=seleccion)];
+				}
+				free(alarmasOFF);
+				alarmasOFF = alarmasTemp;
+
+				num_alarmas--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+		break;
+	case Ajustes_Auto_Humedad:
+		AjustarHumedad();
+		modo = Automatico_Humedad;
+		pantalla = Estado;
+		printMenu_Estado();
+		HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+		HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
+		break;
+	default:
+		modo = Manual;
+		pantalla = Estado;
+		printMenu_Estado();
+		HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+		HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+		HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+		HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
+	}
+}
 
 
-void printMenu_Start(MODO modo){
+
+
+
+
+
+
+void printMenu_Estado(){
+	if(humedad > humedad_maxima){
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)DEMASIADA_AGUA);
+	}
+	else if(humedad > humedad_minima){
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)BIEN_AGUA);
+	}
+	else{
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)POCA_AGUA);
+	}
+}
+
+void printMenu_Start(){
 	ST7735_FillScreenFast(ST7735_CYAN);
 	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 40, ST7735_WHITE);
 	switch(modo){
@@ -562,11 +937,358 @@ void printMenu_Start(MODO modo){
 	}
 }
 void printMenu_CambioModo(){
-	ST7735_FillScreenFast(ST7735_GREEN);
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_FillRectangleFast(5, 56, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_FillRectangleFast(5, 107, ST7735_WIDTH-10, 48, ST7735_WHITE);
+
+	ST7735_WriteString(31, 20, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+	ST7735_WriteString(9, 61, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(25, 81, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+	ST7735_WriteString(9, 112, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(31, 132, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
 }
 
 void printSeleccion(uint8_t altura){
-	ST7735_FillScreenFast(ST7735_RED);
+	for(int x = 5; x < ST7735_WIDTH-5; x++) {
+		ST7735_DrawPixel(x, 5+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 6+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 5+48+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 4+48+(altura*51), ST7735_GREEN);
+	}
+
+	for(int y = 5+(altura*51); y < 5+48+(altura*51); y++) {
+		ST7735_DrawPixel(5, y, ST7735_GREEN);
+		ST7735_DrawPixel(6, y, ST7735_GREEN);
+		ST7735_DrawPixel(ST7735_WIDTH-5, y, ST7735_GREEN);
+		ST7735_DrawPixel(ST7735_WIDTH-6, y, ST7735_GREEN);
+	}
+}
+
+void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	char alarma[12];
+	sprintf(alarma,"ON:  %02d:%02d",horaON.Hours,horaON.Minutes);
+	ST7735_WriteString(10, 10+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	sprintf(alarma,"OFF: %02d:%02d",horaOFF.Hours,horaOFF.Minutes);
+	ST7735_WriteString(10, 30+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+}
+
+void printCrearAlarma(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	for(uint16_t x = 0; x <= 17; x++){
+		for(uint16_t y = 0; y <= 17; y++){
+			if(x*x+y*y < 289){
+				if(x < 3 && y < 12){
+					continue;
+				}
+				if(x < 12 && y < 3){
+					continue;
+				}
+				ST7735_DrawPixel(64+x, (29+51*altura)+y, ST7735_GREEN);
+				ST7735_DrawPixel(64+x, (29+51*altura)-y, ST7735_GREEN);
+				ST7735_DrawPixel(64-x, (29+51*altura)+y, ST7735_GREEN);
+				ST7735_DrawPixel(64-x, (29+51*altura)-y, ST7735_GREEN);
+			}
+		}
+	}
+}
+void printOK(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_WriteString(48, 16+51*altura, "OK", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+}
+void crearAlarma(RTC_TimeTypeDef* returnVal){
+	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+	RTC_TimeTypeDef ON = {0};
+	RTC_TimeTypeDef OFF = {0};
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(48, 10, "ON", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	char alarma[9];
+	while(true){ //Selección de hora de encendido
+		if(update_screen){
+			sprintf(alarma,"%02d:%02d",ON.Hours,ON.Minutes);
+			ST7735_WriteString(36, 30, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(ON.Hours == 23){
+				ON.Hours = 0;
+			}
+			else{
+				ON.Hours++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(ON.Hours == 0){
+				ON.Hours = 23;
+			}
+			else{
+				ON.Hours--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	while(true){ //Selección de minuto de encendido
+		if(update_screen){
+			sprintf(alarma,"%02d:%02d",ON.Hours,ON.Minutes);
+			ST7735_WriteString(36, 30, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(ON.Minutes == 59){
+				ON.Minutes = 0;
+			}
+			else{
+				ON.Minutes++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(ON.Minutes == 0){
+				ON.Minutes = 59;
+			}
+			else{
+				ON.Minutes--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(40, 10, "OFF", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	while(true){ //Selección de hora de apagado
+		if(update_screen){
+			sprintf(alarma,"%02d.%02d",OFF.Hours,OFF.Minutes);
+			ST7735_WriteString(36, 30, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(OFF.Hours == 23){
+				OFF.Hours = 0;
+			}
+			else{
+				OFF.Hours++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(OFF.Hours == 0){
+				OFF.Hours = 23;
+			}
+			else{
+				OFF.Hours--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	while(true){ //Selección de minuto de apagado
+		if(update_screen){
+			sprintf(alarma,"%02d.%02d",OFF.Hours,OFF.Minutes);
+			ST7735_WriteString(36, 30, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(OFF.Minutes == 59){
+				OFF.Minutes = 0;
+			}
+			else{
+				OFF.Minutes++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(OFF.Minutes == 0){
+				OFF.Minutes = 59;
+			}
+			else{
+				OFF.Minutes--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	returnVal[0] = ON;
+	returnVal[1] = OFF;
+}
+void AjustarHumedad(){
+	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(16, 10, "MINIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	char valor[4];
+	while(true){ //Selección de humedad minima
+		if(update_screen){
+			sprintf(valor,"%02d%c",humedad_minima,37);
+			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(humedad_minima == 100){
+				humedad_minima = 0;
+			}
+			else{
+				humedad_minima++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(humedad_minima == 0){
+				humedad_minima = 100;
+			}
+			else{
+				humedad_minima--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(16, 10, "MAXIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	while(true){ //Selección de humedad maxima
+		if(update_screen){
+			sprintf(valor,"%02d%c",humedad_maxima,37);
+			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(humedad_maxima == 100){
+				humedad_maxima = humedad_minima;
+			}
+			else{
+				humedad_maxima++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(humedad_maxima <= humedad_minima){
+				humedad_maxima = 100;
+			}
+			else{
+				humedad_maxima--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	humedad_media = (humedad_minima+humedad_maxima)/2;
+}
+
+
+
+
+
+
+
+
+
+//	Interrupción de botones
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	static uint32_t last_press = 0;
+	if(HAL_GetTick() < last_press){
+		return;
+	}
+
+	if(GPIO_Pin==GPIO_PIN_0){
+		AbrirValvula();
+	}
+	if(GPIO_Pin==GPIO_PIN_2){
+		CerrarValvula();
+	}
+	if(GPIO_Pin==GPIO_PIN_3){
+		pantalla = Modo_Actual;
+		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		HAL_TIM_Base_Start_IT(&htim3);
+	}
+	last_press = HAL_GetTick()+250;
+}
+//	Interrupción de RTC
+void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
+{
+	nextAlarma();
+}
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
+	if (htim->Instance == TIM3){
+		pantalla = Estado;
+		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		HAL_TIM_Base_Stop_IT(&htim3);
+		HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+		if(modo == Manual){
+			HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+			HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+		}
+		__HAL_TIM_SET_COUNTER(&htim3, 0);
+	}
+}
+void nextAlarma(){
+	siguiente_alarma = (siguiente_alarma+1)%num_alarmas;
+
+	RTC_AlarmTypeDef sAlarm = {0};
+
+	if(isTimeToTurnOn)
+	{
+		HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, 1);
+		isTimeToTurnOn = 0;
+		sAlarm.AlarmTime.Hours = alarmasON[siguiente_alarma].Hours;
+		sAlarm.AlarmTime.Minutes = alarmasON[siguiente_alarma].Minutes;
+	}
+	else
+	{
+		HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, 0);
+		isTimeToTurnOn = 1;
+		sAlarm.AlarmTime.Hours = alarmasOFF[siguiente_alarma].Hours;
+		sAlarm.AlarmTime.Minutes = alarmasOFF[siguiente_alarma].Minutes;
+	}
+
+
+	sAlarm.AlarmTime.Seconds = 0x0;
+	sAlarm.AlarmTime.SubSeconds = 0x0;
+	sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+	sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
+	sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
+	sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
+	sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
+	sAlarm.AlarmDateWeekDay = 0x31;
+	sAlarm.Alarm = RTC_ALARM_A;
+
+	if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+	{
+		Error_Handler();
+	}
 }
 /* USER CODE END 4 */
 
