@@ -33,6 +33,7 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 RTC_TimeTypeDef sTime;
+RTC_DateTypeDef sDate;
 typedef enum {Manual = 0, Automatico_Humedad, Automatico_Tiempo} MODO;
 typedef enum {Estado = 0, Modo_Actual, Cambio_Modo, Ajustes_Auto_Tiempo, Ajustes_Auto_Humedad} PANTALLA;
 /* USER CODE END PTD */
@@ -162,13 +163,11 @@ int main(void)
   MX_RTC_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim3);
   HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
+  HAL_TIM_Base_Start_IT(&htim3);
   Led_Init();
   ST7735_Init();
   printMenu_Estado();
-
-  uint32_t refresh_time = HAL_GetTick()+15000;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -181,11 +180,6 @@ int main(void)
 	  menuHandler();
 
 	  LED_ON_OFF(humedad);
-
-	  if(HAL_GetTick() > refresh_time){
-		  HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
-		  printTime();
-	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -359,7 +353,7 @@ static void MX_RTC_Init(void)
   sAlarm.AlarmTime.SubSeconds = 0;
   sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
+  sAlarm.AlarmMask = RTC_ALARMMASK_DATEWEEKDAY|RTC_ALARMMASK_SECONDS;
   sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
   sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
   sAlarm.AlarmDateWeekDay = 1;
@@ -1230,7 +1224,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if(GPIO_Pin==GPIO_PIN_3){
 		pantalla = Modo_Actual;
 		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		HAL_TIM_Base_Start_IT(&htim3);
+		//HAL_TIM_Base_Start_IT(&htim3);
 	}
 	last_press = HAL_GetTick()+250;
 }
@@ -1242,21 +1236,30 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 	isTimeToTurnOn ^= isTimeToTurnOn;
 }
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
-#ifndef __DEBUG__
 	if (htim->Instance == TIM3){
-		pantalla = Estado;
-		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		HAL_TIM_Base_Stop_IT(&htim3);
-		HAL_NVIC_EnableIRQ(EXTI3_IRQn);
-		if(modo == Manual){
-			HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-			HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+		if(pantalla == Estado)
+		{
+			HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+			HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN); //La fecha no se usa
+			//Linea añadida porque para que HAL_RTC_GetTime funcione correctamente, es necesario
+			//Llamar a HAL_RTC_GetDate despues
+			printTime();
 		}
-		__HAL_TIM_SET_COUNTER(&htim3, 0);
+		#ifndef __DEBUG__
+		else
+		{
+			pantalla = Estado;
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+			//HAL_TIM_Base_Stop_IT(&htim3);
+			HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+			if(modo == Manual){
+				HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+				HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+			}
+			__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		#endif
 	}
-#else
-	return;
-#endif
 }
 void nextAlarma(){
 	siguiente_alarma = (siguiente_alarma+1)%num_alarmas;
