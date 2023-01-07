@@ -43,7 +43,7 @@ typedef enum {Estado = 0, Modo_Actual, Cambio_Modo, Ajustes_Auto_Tiempo, Ajustes
 #define ADC_HUMEDAD_MAX 850
 #define ADC_HUMEDAD_MIN 735
 
-#define __DEBUG__
+//#define __DEBUG__
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -115,10 +115,12 @@ void printMenu_CambioModo();
 void printSeleccion(uint8_t altura);
 void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura);
 void printCrearAlarma(uint8_t altura);
+void printCambiarHora(uint8_t altura);
 void printTime();
 void printOK(uint8_t altura);
 void printMenu_Estado();
 void crearAlarma(RTC_TimeTypeDef* returnVal);
+void CambiarHora();
 void AjustarHumedad();
 
 void nextAlarma();
@@ -718,11 +720,11 @@ void menuHandler(){
 			printSeleccion(seleccion);
 			update_screen = 0;
 		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button0 == 0){
 			seleccion = seleccion==2?2:seleccion+1;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button1 == 0){
 			seleccion = seleccion==0?0:seleccion-1;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
@@ -767,13 +769,16 @@ void menuHandler(){
 					if(num_alarmas-seleccion < 2){
 						printOK(num_alarmas-seleccion+1);
 					}
+					if(num_alarmas-seleccion < 1){
+						printCambiarHora(num_alarmas-seleccion+2);
+					}
 				}
-				/*else if(seleccion == num_alarmas){
-					printCrearAlarma(0);
-					printOK(1);
-				}*/
-				else{
+				else if(seleccion == num_alarmas+1){
 					printOK(0);
+					printCambiarHora(1);
+				}
+				else{
+					printCambiarHora(0);
 				}
 			}
 			else
@@ -783,16 +788,19 @@ void menuHandler(){
 			printSeleccion(0);
 			update_screen = 0;
 		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
-			seleccion = seleccion>=num_alarmas+1?num_alarmas+1:seleccion+1;
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button0 == 0){
+			seleccion = seleccion>=num_alarmas+2?num_alarmas+2:seleccion+1;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button1 == 0){
 			seleccion = seleccion==0?0:seleccion-1;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
-			if(seleccion >= num_alarmas + 1)
+			if(seleccion >= num_alarmas + 2){
+				CambiarHora();
+			}
+			else if(seleccion == num_alarmas + 1)
 			{
 				modo = Automatico_Tiempo;
 				pantalla = Estado;
@@ -982,6 +990,11 @@ void printCrearAlarma(uint8_t altura){
 		}
 	}
 }
+void printCambiarHora(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_WriteString(25, 10+51*altura, "Cambiar", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(42, 30+51*altura, "Hora", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+}
 void printTime(){
 	char hora[6];
 	sprintf(hora,"%02d:%02d",sTime.Hours,sTime.Minutes);
@@ -997,7 +1010,7 @@ void crearAlarma(RTC_TimeTypeDef* returnVal){
 	RTC_TimeTypeDef OFF = {0};
 	ST7735_FillScreenFast(ST7735_CYAN);
 	ST7735_WriteString(48, 10, "ON", Font_16x26, ST7735_BLACK, ST7735_WHITE);
-	char alarma[9];
+	char alarma[6];
 	while(true){ //Selección de hora de encendido
 		if(update_screen){
 			sprintf(alarma,"%02d:%02d",ON.Hours,ON.Minutes);
@@ -1127,6 +1140,78 @@ void crearAlarma(RTC_TimeTypeDef* returnVal){
 	returnVal[0] = ON;
 	returnVal[1] = OFF;
 }
+
+void CambiarHora(){
+	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+	RTC_TimeTypeDef Time = sTime;
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(42, 10, "Hora", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	char hora[6];
+	while(true){ //Selección de hora de encendido
+		if(update_screen){
+			sprintf(hora,"%02d:%02d",Time.Hours,Time.Minutes);
+			ST7735_WriteString(36, 30, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(Time.Hours == 23){
+				Time.Hours = 0;
+			}
+			else{
+				Time.Hours++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(Time.Hours == 0){
+				Time.Hours = 23;
+			}
+			else{
+				Time.Hours--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	while(true){ //Selección de minuto de encendido
+		if(update_screen){
+			sprintf(hora,"%02d:%02d",Time.Hours,Time.Minutes);
+			ST7735_WriteString(36, 30, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(Time.Minutes == 59){
+				Time.Minutes = 0;
+			}
+			else{
+				Time.Minutes++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(Time.Minutes == 0){
+				Time.Minutes = 59;
+			}
+			else{
+				Time.Minutes--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	HAL_RTC_SetTime(&hrtc, &Time, RTC_FORMAT_BIN);
+}
+
 void AjustarHumedad(){
 	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 	ST7735_FillScreenFast(ST7735_CYAN);
@@ -1218,10 +1303,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if(GPIO_Pin==GPIO_PIN_0){
 		AbrirValvula();
 	}
-	if(GPIO_Pin==GPIO_PIN_2){
+	else if(GPIO_Pin==GPIO_PIN_2){
 		CerrarValvula();
 	}
-	if(GPIO_Pin==GPIO_PIN_3){
+	else if(GPIO_Pin==GPIO_PIN_3){
 		pantalla = Modo_Actual;
 		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		//HAL_TIM_Base_Start_IT(&htim3);
@@ -1231,9 +1316,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 //	Interrupción de RTC
 void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
-	nextAlarma();
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, isTimeToTurnOn);
 	isTimeToTurnOn ^= isTimeToTurnOn;
+	nextAlarma();
 }
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	if (htim->Instance == TIM3){
@@ -1275,6 +1360,7 @@ void nextAlarma(){
 	{
 		sAlarm.AlarmTime.Hours = alarmasOFF[siguiente_alarma].Hours;
 		sAlarm.AlarmTime.Minutes = alarmasOFF[siguiente_alarma].Minutes;
+		siguiente_alarma++;
 	}
 
 
