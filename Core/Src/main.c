@@ -100,16 +100,14 @@ void Led_Init();
 uint8_t sensorHumedad();
 void AbrirValvula();
 void CerrarValvula();
-void ControlManual();
-void ControlAutomatico_Humedad(uint8_t humedad);
-void ControlAutomatico_Tiempo();
+void ControlAutomatico_Humedad();
 void LED_ON_OFF(uint8_t humedad);
 void WriteRGB(uint8_t R, uint8_t G, uint8_t B);
 
 void modoHandler();
 void menuHandler();
 
-void printMenu_Start();
+void printMenu_ModoActual();
 void printMenu_CambioModo();
 
 void printSeleccion(uint8_t altura);
@@ -573,34 +571,25 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/*****************
+ *INICIALIZADORES*
+ *****************/
+
+//Inicializa los temporizadores necesarios para controlar
+//el led RGB a través de PWM
 void Led_Init(){
 	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
 	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
 	HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
 }
 
-//	Control manual de riego
-void ControlManual()
-{
+/**********************
+ *FUNCIONES AUXILIARES*
+ **********************/
 
-}
-//	Control automático de riego basado en la humedad de la tierra
-void ControlAutomatico_Humedad(uint8_t humedad)
-{
-	if (humedad > humedad_maxima){
-		CerrarValvula();
-	}
-	else if(humedad < humedad_minima){
-		AbrirValvula();
-	}
-}
-
-//	Control automático de riego basado en tiempo
-void ControlAutomatico_Tiempo()
-{
-
-}
-
+//Lee el valor del ADC y lo transforma en un valor de humedad comprendido entre 0 y 100
+//a través de un entero sin signo de 8 bits
 uint8_t sensorHumedad(){
 	uint8_t valor_porc_sens = 0;
 	HAL_ADC_Start(&hadc1);
@@ -615,19 +604,22 @@ uint8_t sensorHumedad(){
 	return valor_porc_sens;
 }
 
+//Abre la válvula
 void AbrirValvula(){
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15,1);
 }
 
+//Cierra la válvula
 void CerrarValvula(){
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15,0);
 }
-//	Encendido de led
+
+//Cambia el color del LED RGB según la humedad medida una vez cada 0.1s
 void LED_ON_OFF(uint8_t humedad)
 {
 	static uint32_t last_time = 0;
 	if(HAL_GetTick() < last_time + 100){
-		//return;
+		return;
 	}
 
 	if(humedad < humedad_minima){
@@ -656,8 +648,9 @@ void LED_ON_OFF(uint8_t humedad)
 	}
 
 	last_time = HAL_GetTick();
-	//while(HAL_GetTick()-last_time < 100){};
 }
+
+//Recibe un valor RGB y lo representa en el LED
 void WriteRGB(uint8_t R, uint8_t G, uint8_t B){
 	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 255-R);
 	__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, 255-G);
@@ -665,23 +658,34 @@ void WriteRGB(uint8_t R, uint8_t G, uint8_t B){
 }
 
 
-//HANDLERS
+/********************
+ *GESTIÓN DE ESTADOS*
+ ********************/
+
+//Determina qué funciones de operación llamar según el modo de trabajo en el que se encuetre el sistema
 void modoHandler(){
 	switch(modo){
 	case Manual:
-		ControlManual();
+		//Gestionado por interrupciones externas. Ver: void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		break;
 	case Automatico_Humedad:
-		ControlAutomatico_Humedad(humedad);
+		ControlAutomatico_Humedad();
 		break;
 	case Automatico_Tiempo:
-		ControlAutomatico_Tiempo();
+		//Gestionado por interrupciones del RTC. Ver: void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 		break;
 	default:
 		modo = Manual;
 		break;
 	}
 }
+
+//Gestiona la interfaz que se representa en la pantalla
+//
+//Si se encuentra en la pantalla de estado comprueba si esta debe ser actualizada, de lo contrario, finaliza su ejecución.
+//Si se encuentra en otra pantalla desactiva las interrupciones de los botones, ya que en este estado esta se hace por
+//polling y gestiona la interfaz en función de en qué pantalla se encuentra.
+//Tiene una variable estática "selección" que permite recordar cuál de las opciones de cada menú está eligiendo el usuario
 void menuHandler(){
 	static uint32_t seleccion = 0;
 	if(pantalla == Estado){
@@ -701,8 +705,11 @@ void menuHandler(){
 
 	switch(pantalla){
 	case Modo_Actual:
+		//Muestra el modo en el que el sistema se encuentra operando en el momento
+		//Si el usuario presiona el botón de la derecha pasa a la pantalla de
+		//elección de modo
 		if(update_screen){
-			printMenu_Start();
+			printMenu_ModoActual();
 			update_screen = 0;
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
@@ -715,6 +722,12 @@ void menuHandler(){
 		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
 		break;
 	case Cambio_Modo:
+		//Muestra los 3 modos de operación disponibles en la pantalla
+		//y marca con un recuadro verde el seleccionado.
+		//Con los dos botones izquierdos el usuario puede modificar su selección
+		//Con el botón de la derecha el usuario hace efectiva su elección
+		//Y a través de un switch case se decide la próxima pantalla a la que
+		//debe pasar
 		if(update_screen){
 			printMenu_CambioModo();
 			printSeleccion(seleccion);
@@ -752,13 +765,19 @@ void menuHandler(){
 		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
 		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
 		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
-		//HAL_Delay(50);
 		break;
 	case Ajustes_Auto_Tiempo:
+		//Muestra las alarmas creadas y permite al usuario desplazarse por ellas usando
+		//los dos botones de la izquierda, al final de las alarmas se muestran los botones
+		//para crear una nueva alarma, para aceptar y hacer efectiva la elección de modo
+		//y para cambiar la hora del dispositivo.
 		if(update_screen){
 			ST7735_FillScreenFast(ST7735_CYAN);
 			if(alarmasON != 0)
 			{
+				//Si hay alarmas creadas, imprime en pantalla las alarmas desde [seleccion] hasta
+				//[seleccion+2], en caso de que no existan suficientes alarmas, imprime los botones
+				//extra que sean necesarios ("crear alarma", "OK" y "cambiar hora").
 				if(seleccion <= num_alarmas){
 					for(uint8_t i = 0; i < MIN(num_alarmas-seleccion, 3); i++){
 						printAlarma(alarmasON[i], alarmasOFF[i], i);
@@ -783,35 +802,62 @@ void menuHandler(){
 			}
 			else
 			{
-				printCrearAlarma(0);
+				//Si no hay alarmas creadas, solamente muestra los botones de crear alarma y
+				//cambio de hora.
+				if(seleccion == 0){
+					printCrearAlarma(0);
+					printCambiarHora(1);
+				}
+				else{
+					printCambiarHora(0);
+				}
 			}
 			printSeleccion(0);
 			update_screen = 0;
 		}
+		//Navegación por el menú de alarmas
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button0 == 0){
-			seleccion = seleccion>=num_alarmas+2?num_alarmas+2:seleccion+1;
+			if(alarmasON == 0){
+				seleccion = num_alarmas+2;
+			}
+			else
+			{
+				seleccion = seleccion>=num_alarmas+2?num_alarmas+2:seleccion+1;
+			}
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button1 == 0){
-			seleccion = seleccion==0?0:seleccion-1;
+			if(alarmasON == 0){
+				seleccion = 0;
+			}
+			else
+			{
+				seleccion = seleccion==0?0:seleccion-1;
+			}
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
+		//Selección
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
 			if(seleccion >= num_alarmas + 2){
+				//Si el usuario está seleccionando el botón de cambio de hora
 				CambiarHora();
 			}
 			else if(seleccion == num_alarmas + 1)
 			{
+				//Si el usuario está seleccionando el botón de "OK" activa las interrupciones y genera la próxima
 				modo = Automatico_Tiempo;
 				pantalla = Estado;
 				printMenu_Estado();
-				__HAL_RTC_ALARM_CLEAR_FLAG(&hrtc, RTC_FLAG_ALRAF);
+				__HAL_RTC_ALARM_CLEAR_FLAG(&hrtc, RTC_FLAG_ALRAF); //Se borra el flag de interrupciones del RTC para evitar comportamientos inesperados
 				HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 				HAL_NVIC_EnableIRQ(RTC_Alarm_IRQn);
 				nextAlarma();
 			}
 			else if(seleccion == num_alarmas)
 			{
+				//Si el usuario está seleccionando el botón de crear una nueva alarma lo envía a la función
+				//"crearAlarma" que proporciona la interfaz necesaria para hacerlo, reasigna la memoria dinámicamente
+				//y añade la nueva alarma al vector de alarmas de encendido y apagado
 				RTC_TimeTypeDef nueva_alarma[2];
 				crearAlarma(nueva_alarma);
 				RTC_TimeTypeDef ON  = nueva_alarma[0];
@@ -844,27 +890,37 @@ void menuHandler(){
 				}
 			}
 			else{
-				RTC_TimeTypeDef* alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
-				if(alarmasTemp == NULL){
-					Error_Handler();
+				//Si el usuario está seleccionando una alarma cualquiera, entonces esta se elimina
+				//Y se reasigna la memoria de forma adecuada
+				if(num_alarmas == 1){
+					free(alarmasON);
+					free(alarmasOFF);
+					alarmasON = 0;
+					alarmasOFF = 0;
 				}
-				for(uint32_t i = 0; i < num_alarmas-1; i++){
-					alarmasTemp[i] = alarmasON[i+((uint32_t)i>=seleccion)];
-				}
-				free(alarmasON);
-				alarmasON = alarmasTemp;
+				else{
+					RTC_TimeTypeDef* alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
+					if(alarmasTemp == NULL){
+						Error_Handler();
+					}
+					for(uint32_t i = 0; i < num_alarmas-1; i++){
+						alarmasTemp[i] = alarmasON[i+((uint32_t)i>=seleccion)];
+					}
+					free(alarmasON);
+					alarmasON = alarmasTemp;
 
-				alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
-				if(alarmasTemp == NULL){
-					Error_Handler();
-				}
-				for(uint32_t i = 0; i < num_alarmas-1; i++){
-					alarmasTemp[i] = alarmasOFF[i+((uint32_t)i>=seleccion)];
-				}
-				free(alarmasOFF);
-				alarmasOFF = alarmasTemp;
+					alarmasTemp = malloc((num_alarmas-1)*sizeof(RTC_TimeTypeDef));
+					if(alarmasTemp == NULL){
+						Error_Handler();
+					}
+					for(uint32_t i = 0; i < num_alarmas-1; i++){
+						alarmasTemp[i] = alarmasOFF[i+((uint32_t)i>=seleccion)];
+					}
+					free(alarmasOFF);
+					alarmasOFF = alarmasTemp;
 
-				num_alarmas--;
+					num_alarmas--;
+				}
 			}
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
@@ -873,6 +929,8 @@ void menuHandler(){
 		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
 		break;
 	case Ajustes_Auto_Humedad:
+		//Muestra al usuario los ajustes de humedad almacenados y le permite modificarlos antes de activar
+		//el modo automático
 		AjustarHumedad();
 		modo = Automatico_Humedad;
 		pantalla = Estado;
@@ -881,6 +939,7 @@ void menuHandler(){
 		HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
 		break;
 	default:
+		//Por defecto se asigna al modo manual
 		modo = Manual;
 		pantalla = Estado;
 		printMenu_Estado();
@@ -892,118 +951,136 @@ void menuHandler(){
 }
 
 
-
-
-
-
-
-
-void printMenu_Estado(){
-	if(humedad > humedad_maxima){
-		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)DEMASIADA_AGUA);
+/********************
+ *AUTOMÁTICO HUMEDAD*
+ ********************/
+//	Control automático de riego basado en la humedad de la tierra
+//
+//Si la humedad medida cae por debajo de la mínima, se abre la válvula, permitiendo al agua pasar
+//Si la humedad medida supera la máxima entonces cierra la válvula para evitar liberar más agua
+void ControlAutomatico_Humedad()
+{
+	if (humedad >= humedad_maxima){
+		CerrarValvula();
 	}
-	else if(humedad > humedad_minima){
-		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)BIEN_AGUA);
+	else if(humedad <= humedad_minima){
+		AbrirValvula();
 	}
-	else{
-		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)POCA_AGUA);
-	}
-	printTime();
 }
 
-void printMenu_Start(){
+//Esta función permite al usuario ajustar los valores de humedad mínima y máxima entre
+//los que quiere se se mantenga la planta en el modo "Automático Humedad".
+//
+//Primero se ajusta el valor de humedad mínimo incrementando y decrementando su valor a
+//través de los dos botones de la izquierda. Si este disminuye de 0, regresa a 100; y si
+//supera 100, regresa a 0.
+//El mismo proceso se repite para el ajuste del valor máximo, con la diferencia de que este
+//no puede ser menor al valor mínimo previamnte elegido.
+//La lectura de los botones se hace por polling dentro de un bucle infinito el cual se rompe
+//con el botón de la derecha permitiendo continuar con el resto del código
+void AjustarHumedad(){
+
+	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 	ST7735_FillScreenFast(ST7735_CYAN);
-	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 40, ST7735_WHITE);
-	switch(modo){
-	case Manual:
-		ST7735_WriteString(31, 16, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		break;
-	case Automatico_Humedad:
-		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		ST7735_WriteString(25, 26, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		break;
-	case Automatico_Tiempo:
-		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		ST7735_WriteString(31, 26, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		break;
-	default:
-		ST7735_WriteString(36, 16, "Error", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		break;
-	}
-}
-void printMenu_CambioModo(){
-	ST7735_FillScreenFast(ST7735_CYAN);
-	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	ST7735_FillRectangleFast(5, 56, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	ST7735_FillRectangleFast(5, 107, ST7735_WIDTH-10, 48, ST7735_WHITE);
-
-	ST7735_WriteString(31, 20, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-
-	ST7735_WriteString(9, 61, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-	ST7735_WriteString(25, 81, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-
-	ST7735_WriteString(9, 112, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-	ST7735_WriteString(31, 132, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-}
-
-void printSeleccion(uint8_t altura){
-	for(int x = 5; x < ST7735_WIDTH-5; x++) {
-		ST7735_DrawPixel(x, 5+(altura*51), ST7735_GREEN);
-		ST7735_DrawPixel(x, 6+(altura*51), ST7735_GREEN);
-		ST7735_DrawPixel(x, 5+48+(altura*51), ST7735_GREEN);
-		ST7735_DrawPixel(x, 4+48+(altura*51), ST7735_GREEN);
-	}
-
-	for(int y = 5+(altura*51); y < 5+48+(altura*51); y++) {
-		ST7735_DrawPixel(5, y, ST7735_GREEN);
-		ST7735_DrawPixel(6, y, ST7735_GREEN);
-		ST7735_DrawPixel(ST7735_WIDTH-5, y, ST7735_GREEN);
-		ST7735_DrawPixel(ST7735_WIDTH-6, y, ST7735_GREEN);
-	}
-}
-
-void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura){
-	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	char alarma[12];
-	sprintf(alarma,"ON:  %02d:%02d",horaON.Hours,horaON.Minutes);
-	ST7735_WriteString(10, 10+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
-	sprintf(alarma,"OFF: %02d:%02d",horaOFF.Hours,horaOFF.Minutes);
-	ST7735_WriteString(10, 30+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
-}
-
-void printCrearAlarma(uint8_t altura){
-	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	for(uint16_t x = 0; x <= 17; x++){
-		for(uint16_t y = 0; y <= 17; y++){
-			if(x*x+y*y < 289){
-				if(x < 3 && y < 12){
-					continue;
-				}
-				if(x < 12 && y < 3){
-					continue;
-				}
-				ST7735_DrawPixel(64+x, (29+51*altura)+y, ST7735_GREEN);
-				ST7735_DrawPixel(64+x, (29+51*altura)-y, ST7735_GREEN);
-				ST7735_DrawPixel(64-x, (29+51*altura)+y, ST7735_GREEN);
-				ST7735_DrawPixel(64-x, (29+51*altura)-y, ST7735_GREEN);
-			}
+	ST7735_WriteString(16, 10, "MINIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	char valor[4];
+	while(true){ //Selección de humedad minima
+		if(update_screen){
+			sprintf(valor,"%02d%c",humedad_minima,37);
+			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
 		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(humedad_minima == 100){
+				humedad_minima = 0;
+				ST7735_FillScreenFast(ST7735_CYAN);
+				ST7735_WriteString(16, 10, "MINIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+			}
+			else{
+				humedad_minima++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(humedad_minima == 100){
+				ST7735_FillScreenFast(ST7735_CYAN);
+				ST7735_WriteString(16, 10, "MINIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+			}
+			if(humedad_minima == 0){
+				humedad_minima = 100;
+			}
+			else{
+				humedad_minima--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
 	}
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_WriteString(16, 10, "MAXIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+	while(true){ //Selección de humedad maxima
+		if(update_screen){
+			sprintf(valor,"%02d%c",humedad_maxima,37);
+			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
+			if(humedad_maxima == 100){
+				humedad_maxima = humedad_minima;
+				ST7735_FillScreenFast(ST7735_CYAN);
+				ST7735_WriteString(16, 10, "MAXIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+			}
+			else{
+				humedad_maxima++;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
+			if(humedad_maxima == 100){
+				ST7735_FillScreenFast(ST7735_CYAN);
+				ST7735_WriteString(16, 10, "MAXIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+			}
+			if(humedad_maxima <= humedad_minima){
+				humedad_maxima = 100;
+			}
+			else{
+				humedad_maxima--;
+			}
+			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
+		}
+		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
+			button2 = 1;
+			break;
+		}
+		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
+		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	}
+	humedad_media = (humedad_minima+humedad_maxima)/2;
 }
-void printCambiarHora(uint8_t altura){
-	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	ST7735_WriteString(25, 10+51*altura, "Cambiar", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-	ST7735_WriteString(42, 30+51*altura, "Hora", Font_11x18, ST7735_BLACK, ST7735_WHITE);
-}
-void printTime(){
-	char hora[6];
-	sprintf(hora,"%02d:%02d",sTime.Hours,sTime.Minutes);
-	ST7735_WriteString(92, 0, hora, Font_7x10, ST7735_BLACK, ST7735_WHITE);
-}
-void printOK(uint8_t altura){
-	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
-	ST7735_WriteString(48, 16+51*altura, "OK", Font_16x26, ST7735_BLACK, ST7735_WHITE);
-}
+
+/*******************
+ *AUTOMÁTICO TIEMPO*
+ *******************/
+
+//Esta función permite al usuario crear una nueva alarma de encendido y apagado
+//
+//Para esto crea una variable "ON" y otra "OFF" en las que se almacenarán la hora de encendido
+//y apagado de la alarma
+//Primero permite al usuario incrementar y decrementar el valor de la hora de encendido usando
+//los dos botones de la izquierda. Si supera 23h, regresa a 0; si va por debajo de 0, sube a 23.
+//Una vez que presiona el botón de la derecha pasa al ajuste de minutos que funciona de la
+//misma forma.
+//Una vez ajustado correctamente el tiempo de inicio, se repite el proceso pero con la hora de
+//apagado.
+//La lectura de los botones se hace por polling, cad sección se encuentra dentro de un bucle
+//infinito el cual el botón de la derecha rompe para pasar a la siguiente sección de código.
+//Una vez que se han elegido valores para la hora y los minutos de encendido y apagado, se
+//almacenan ambos datos en el puntero que se recibió como parámetro.
 void crearAlarma(RTC_TimeTypeDef* returnVal){
 	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 	RTC_TimeTypeDef ON = {0};
@@ -1141,6 +1218,19 @@ void crearAlarma(RTC_TimeTypeDef* returnVal){
 	returnVal[1] = OFF;
 }
 
+
+//Esta función permite al usuario cambiar la hora del sistema
+//
+//Para esto crea una variable "Time" con los datos de la hora actual registrada en el sistema
+//y la muestra en pantalla.
+//Primero permite al usuario incrementar y decrementar su valor usando los dos botones de la
+//izquierda. Si supera 23h, regresa a 0; si va por debajo de 0, sube a 23.
+//Una vez que presiona el botón de la izquierda pasa al cambio de minutos que funciona de la
+//misma forma.
+//La lectura de los botones se hace por polling, cad sección se encuentra dentro de un bucle
+//infinito el cual el botón de la derecha rompe para pasar a la siguiente sección de código.
+//Una vez que se han elegido valores para la hora y los minutos se guarda el valor de la
+//variable Time en el RTC
 void CambiarHora(){
 	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 	RTC_TimeTypeDef Time = sTime;
@@ -1150,7 +1240,7 @@ void CambiarHora(){
 	while(true){ //Selección de hora de encendido
 		if(update_screen){
 			sprintf(hora,"%02d:%02d",Time.Hours,Time.Minutes);
-			ST7735_WriteString(36, 30, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+			ST7735_WriteString(36, 40, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
 			if(Time.Hours == 23){
@@ -1181,7 +1271,7 @@ void CambiarHora(){
 	while(true){ //Selección de minuto de encendido
 		if(update_screen){
 			sprintf(hora,"%02d:%02d",Time.Hours,Time.Minutes);
-			ST7735_WriteString(36, 30, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+			ST7735_WriteString(36, 40, hora, Font_11x18, ST7735_BLACK, ST7735_WHITE);
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
 			if(Time.Minutes == 59){
@@ -1212,91 +1302,159 @@ void CambiarHora(){
 	HAL_RTC_SetTime(&hrtc, &Time, RTC_FORMAT_BIN);
 }
 
-void AjustarHumedad(){
-	update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-	ST7735_FillScreenFast(ST7735_CYAN);
-	ST7735_WriteString(16, 10, "MINIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
-	char valor[4];
-	while(true){ //Selección de humedad minima
-		if(update_screen){
-			sprintf(valor,"%02d%c",humedad_minima,37);
-			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
-			if(humedad_minima == 100){
-				humedad_minima = 0;
-			}
-			else{
-				humedad_minima++;
-			}
-			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
-			if(humedad_minima == 0){
-				humedad_minima = 100;
-			}
-			else{
-				humedad_minima--;
-			}
-			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
-			button2 = 1;
-			break;
-		}
-		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
-		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
-		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+
+/************************
+ *CONTROL DE LA PANTALLA*
+ ************************/
+
+/*Menús*/
+
+//Pantalla de inicio que muestra información sobre el nivel de humedad y la hora del dispositivo
+//
+//Para esto, según el nivel de humedad dibuja una de 3 imágenes cuya información se encuentra
+//almacenada dentro de testimg.h
+//Una vez dibujada la imagen correcta se superpone la hora
+void printMenu_Estado(){
+	if(humedad > humedad_maxima){
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)DEMASIADA_AGUA);
 	}
-	ST7735_FillScreenFast(ST7735_CYAN);
-	ST7735_WriteString(16, 10, "MAXIMO", Font_16x26, ST7735_BLACK, ST7735_WHITE);
-	while(true){ //Selección de humedad maxima
-		if(update_screen){
-			sprintf(valor,"%02d%c",humedad_maxima,37);
-			ST7735_WriteString(47, 40, valor, Font_11x18, ST7735_BLACK, ST7735_WHITE);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
-			if(humedad_maxima == 100){
-				humedad_maxima = humedad_minima;
-			}
-			else{
-				humedad_maxima++;
-			}
-			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
-			if(humedad_maxima <= humedad_minima){
-				humedad_maxima = 100;
-			}
-			else{
-				humedad_maxima--;
-			}
-			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		}
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
-			button2 = 1;
-			break;
-		}
-		button0 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
-		button1 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2);
-		button2 = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3);
+	else if(humedad > humedad_minima){
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)BIEN_AGUA);
 	}
-	humedad_media = (humedad_minima+humedad_maxima)/2;
+	else{
+		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)POCA_AGUA);
+	}
+	printTime();
+}
+
+//Pantalla que muestra el modo de funcionamiento actual del sistema
+//
+//Para esto llena la imagen del color base (cián) y dibuja un rectángulo blanco sobre
+//el que escribe el nombre del modo en el que se encuentra actualmente
+//
+//TODO: Incluir debajo un aviso de que para cambiar el modo debe pulsar el botón de la derecha
+void printMenu_ModoActual(){
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 40, ST7735_WHITE);
+	switch(modo){
+	case Manual:
+		ST7735_WriteString(31, 16, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	case Automatico_Humedad:
+		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		ST7735_WriteString(25, 26, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	case Automatico_Tiempo:
+		ST7735_WriteString(9, 6, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		ST7735_WriteString(31, 26, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	default:
+		ST7735_WriteString(36, 16, "Error", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+		break;
+	}
+}
+
+//Pantalla que muestra los distintos modos de funcionamiento del sistema
+//
+//Para esto llena la imagen del color base (cián) y dibuja tres rectángulos blanco sobre
+//los cuales escribe el nombre de los distintos modos en los que opera el sistema
+void printMenu_CambioModo(){
+	ST7735_FillScreenFast(ST7735_CYAN);
+	ST7735_FillRectangleFast(5, 5, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_FillRectangleFast(5, 56, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_FillRectangleFast(5, 107, ST7735_WIDTH-10, 48, ST7735_WHITE);
+
+	ST7735_WriteString(31, 20, "Manual", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+	ST7735_WriteString(9, 61, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(25, 81, "Humedad", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+
+	ST7735_WriteString(9, 112, "Automatico", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(31, 132, "Tiempo", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+}
+
+/*Funciones auxiliares*/
+
+//Dibuja los lados de un rectángulo verde con la intención de que marque al usuario la opción
+//que está eligiendo
+void printSeleccion(uint8_t altura){
+	for(int x = 5; x < ST7735_WIDTH-5; x++) {
+		ST7735_DrawPixel(x, 5+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 6+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 5+48+(altura*51), ST7735_GREEN);
+		ST7735_DrawPixel(x, 4+48+(altura*51), ST7735_GREEN);
+	}
+
+	for(int y = 5+(altura*51); y < 5+48+(altura*51); y++) {
+		ST7735_DrawPixel(5, y, ST7735_GREEN);
+		ST7735_DrawPixel(6, y, ST7735_GREEN);
+		ST7735_DrawPixel(ST7735_WIDTH-5, y, ST7735_GREEN);
+		ST7735_DrawPixel(ST7735_WIDTH-6, y, ST7735_GREEN);
+	}
+}
+
+//Dibuja la hora de inicio y de fin de una alarma determinada
+void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	char alarma[12];
+	sprintf(alarma,"ON:  %02d:%02d",horaON.Hours,horaON.Minutes);
+	ST7735_WriteString(10, 10+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	sprintf(alarma,"OFF: %02d:%02d",horaOFF.Hours,horaOFF.Minutes);
+	ST7735_WriteString(10, 30+51*altura, alarma, Font_11x18, ST7735_BLACK, ST7735_WHITE);
+}
+
+//Dibuja el botón de creación de alarmas
+void printCrearAlarma(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	for(uint16_t x = 0; x <= 17; x++){
+		for(uint16_t y = 0; y <= 17; y++){
+			if(x*x+y*y < 289){
+				if(x < 3 && y < 12){
+					continue;
+				}
+				if(x < 12 && y < 3){
+					continue;
+				}
+				ST7735_DrawPixel(64+x, (29+51*altura)+y, ST7735_GREEN);
+				ST7735_DrawPixel(64+x, (29+51*altura)-y, ST7735_GREEN);
+				ST7735_DrawPixel(64-x, (29+51*altura)+y, ST7735_GREEN);
+				ST7735_DrawPixel(64-x, (29+51*altura)-y, ST7735_GREEN);
+			}
+		}
+	}
+}
+
+//Dibuja el botón de "OK"
+void printOK(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_WriteString(48, 16+51*altura, "OK", Font_16x26, ST7735_BLACK, ST7735_WHITE);
+}
+
+//Dibuja el botón de cambiar hora
+void printCambiarHora(uint8_t altura){
+	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
+	ST7735_WriteString(25, 10+51*altura, "Cambiar", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+	ST7735_WriteString(42, 30+51*altura, "Hora", Font_11x18, ST7735_BLACK, ST7735_WHITE);
+}
+
+//Dibuja la hora actual del sistema en la esquina superior derecha
+void printTime(){
+	char hora[6];
+	sprintf(hora,"%02d:%02d",sTime.Hours,sTime.Minutes);
+	ST7735_WriteString(92, 0, hora, Font_7x10, ST7735_BLACK, ST7735_WHITE);
 }
 
 
 
+/***************************
+ *GESTIÓN DE INTERRUPCIONES*
+ ***************************/
 
-
-
-
-
-
-//	Interrupción de botones
+//Interrupción de botones
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	static uint32_t last_press = 0;
-	if(HAL_GetTick() < last_press){
+	if(HAL_GetTick() < last_press){ //Debouncer
 		return;
 	}
 
@@ -1309,17 +1467,27 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	else if(GPIO_Pin==GPIO_PIN_3){
 		pantalla = Modo_Actual;
 		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-		//HAL_TIM_Base_Start_IT(&htim3);
 	}
-	last_press = HAL_GetTick()+250;
+	last_press = HAL_GetTick()+50;
 }
-//	Interrupción de RTC
+
+//Interrupción de RTC
+//
+//Según la flag "isTimeToTurnOn", enciende o apaga la electroválvula
+//y la invierte para la próxima alarma.
+//Luego llama a la función "nextAlarma()" para generar la siguiente interrupción
 void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
 	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, isTimeToTurnOn);
 	isTimeToTurnOn ^= isTimeToTurnOn;
 	nextAlarma();
 }
+
+//Interrupción de temporizador
+//
+//Si está en la pantalla estado, usa esta interrupción para actualizar la hora mostrada en la pantalla
+//De lo contrario, si salta, significa que el usuario lleva mucho tiempo sin interactuar con el menú y
+//regresa a la pantalla de estado.
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 	if (htim->Instance == TIM3){
 		if(pantalla == Estado)
@@ -1330,12 +1498,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 			//Llamar a HAL_RTC_GetDate despues
 			printTime();
 		}
+		//Si está en modo debug, deshabilita el regreso a la pantalla de estado por temporizador
 		#ifndef __DEBUG__
 		else
 		{
 			pantalla = Estado;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
-			//HAL_TIM_Base_Stop_IT(&htim3);
 			HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 			if(modo == Manual){
 				HAL_NVIC_EnableIRQ(EXTI0_IRQn);
@@ -1346,8 +1514,16 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 		#endif
 	}
 }
+
+//Crea la siguiente interrupción del RTC
+//
+//Para esto cuenta con el flag "isTimeToTurnOn" que indica si en la siguiente
+//alarma se debe encender o apagar la bomba, en función de esto toma la siguiente
+//hora del vector de horas de encendido o del vector de horas de apagado
+//El índice "siguiente_alarma" se incrementa en 1 cada vez que se genera una
+//interrupción de apagado de la bomba, ya que el apagado se considera el fin de
+//cada ciclo de alarmas
 void nextAlarma(){
-	siguiente_alarma = (siguiente_alarma+1)%num_alarmas;
 
 	RTC_AlarmTypeDef sAlarm = {0};
 
@@ -1360,7 +1536,7 @@ void nextAlarma(){
 	{
 		sAlarm.AlarmTime.Hours = alarmasOFF[siguiente_alarma].Hours;
 		sAlarm.AlarmTime.Minutes = alarmasOFF[siguiente_alarma].Minutes;
-		siguiente_alarma++;
+		siguiente_alarma = (siguiente_alarma+1)%num_alarmas;
 	}
 
 
