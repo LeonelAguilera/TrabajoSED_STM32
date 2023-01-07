@@ -33,7 +33,6 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 RTC_TimeTypeDef sTime;
-RTC_DateTypeDef sDate;
 typedef enum {Manual = 0, Automatico_Humedad, Automatico_Tiempo} MODO;
 typedef enum {Estado = 0, Modo_Actual, Cambio_Modo, Ajustes_Auto_Tiempo, Ajustes_Auto_Humedad} PANTALLA;
 /* USER CODE END PTD */
@@ -42,6 +41,8 @@ typedef enum {Estado = 0, Modo_Actual, Cambio_Modo, Ajustes_Auto_Tiempo, Ajustes
 /* USER CODE BEGIN PD */
 #define ADC_HUMEDAD_MAX 850
 #define ADC_HUMEDAD_MIN 735
+
+#define __DEBUG__
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -78,14 +79,6 @@ bool update_screen = 1;
 
 bool isTimeToTurnOn = 1;
 
-uint8_t seconds = 0;
-uint8_t minutes = 0;
-uint8_t hours = 0;
-
-uint8_t day = 0;
-uint8_t month = 0;
-uint16_t year = 0;
-
 RTC_TimeTypeDef* alarmasON = 0;
 RTC_TimeTypeDef* alarmasOFF = 0;
 
@@ -121,6 +114,7 @@ void printMenu_CambioModo();
 void printSeleccion(uint8_t altura);
 void printAlarma(RTC_TimeTypeDef horaON, RTC_TimeTypeDef horaOFF, uint8_t altura);
 void printCrearAlarma(uint8_t altura);
+void printTime();
 void printOK(uint8_t altura);
 void printMenu_Estado();
 void crearAlarma(RTC_TimeTypeDef* returnVal);
@@ -172,15 +166,9 @@ int main(void)
   HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
   Led_Init();
   ST7735_Init();
-  /*
-  for(uint8_t k = 0; k <=100; k++){
-	  LED_ON_OFF(k);
-	  HAL_Delay(50);
-  }
-  */
-
-  //uint32_t longtime = 0;
   printMenu_Estado();
+
+  uint32_t refresh_time = HAL_GetTick()+15000;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -193,24 +181,11 @@ int main(void)
 	  menuHandler();
 
 	  LED_ON_OFF(humedad);
-	  /*if(HAL_GetTick() > longtime){
-		  //printMenu_Start(modo);
-		  printMenu_CambioModo();
-		  longtime = HAL_GetTick() + 2000;
-	  }*/
-	  //HAL_Delay(1000);
 
-		HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
-		HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
-
-		///*
-		year = sDate.Year+2000;
-		month = sDate.Month;
-		day = sDate.Date;
-
-		hours = sTime.Hours;
-		minutes = sTime.Minutes;
-		seconds = sTime.Seconds;
+	  if(HAL_GetTick() > refresh_time){
+		  HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+		  printTime();
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -721,8 +696,8 @@ void menuHandler(){
 			printMenu_Estado();
 			update_screen = 0;
 		}
-		return;
 		humedad_previa = humedad;
+		return;
 	}
 	HAL_NVIC_DisableIRQ(EXTI0_IRQn);
 	HAL_NVIC_DisableIRQ(EXTI2_IRQn);
@@ -735,7 +710,7 @@ void menuHandler(){
 			update_screen = 0;
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == 1 && button2 == 0){
-			__HAL_TIM_SET_COUNTER(&htim3, 0);
+			seleccion = 0;
 			pantalla = Cambio_Modo;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
@@ -766,6 +741,13 @@ void menuHandler(){
 				pantalla = Ajustes_Auto_Humedad;
 				break;
 			default:
+				modo = Manual;
+				pantalla = Estado;
+				printMenu_Estado();
+				HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+				HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+				HAL_NVIC_EnableIRQ(EXTI3_IRQn);
+				HAL_NVIC_DisableIRQ(RTC_Alarm_IRQn);
 				break;
 			}
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
@@ -781,14 +763,23 @@ void menuHandler(){
 			ST7735_FillScreenFast(ST7735_CYAN);
 			if(alarmasON != 0)
 			{
-				for(uint8_t i = 0; i < MIN(num_alarmas-seleccion, 3); i++){
-					printAlarma(alarmasON[i], alarmasOFF[i], i);
+				if(seleccion <= num_alarmas){
+					for(uint8_t i = 0; i < MIN(num_alarmas-seleccion, 3); i++){
+						printAlarma(alarmasON[i], alarmasOFF[i], i);
+					}
+					if(num_alarmas-seleccion < 3){
+						printCrearAlarma(num_alarmas-seleccion);
+					}
+					if(num_alarmas-seleccion < 2){
+						printOK(num_alarmas-seleccion+1);
+					}
 				}
-				if(num_alarmas-seleccion < 3){
-					printCrearAlarma(num_alarmas-seleccion);
-				}
-				if(num_alarmas-seleccion < 2){
-					printOK(num_alarmas-seleccion+1);
+				/*else if(seleccion == num_alarmas){
+					printCrearAlarma(0);
+					printOK(1);
+				}*/
+				else{
+					printOK(0);
 				}
 			}
 			else
@@ -799,7 +790,7 @@ void menuHandler(){
 			update_screen = 0;
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 1 && button0 == 0){
-			seleccion = seleccion==num_alarmas?num_alarmas:seleccion+1;
+			seleccion = seleccion>=num_alarmas+1?num_alarmas+1:seleccion+1;
 			update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
 		}
 		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == 1 && button1 == 0){
@@ -812,6 +803,7 @@ void menuHandler(){
 				modo = Automatico_Tiempo;
 				pantalla = Estado;
 				printMenu_Estado();
+				__HAL_RTC_ALARM_CLEAR_FLAG(&hrtc, RTC_FLAG_ALRAF);
 				HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 				HAL_NVIC_EnableIRQ(RTC_Alarm_IRQn);
 				nextAlarma();
@@ -914,6 +906,7 @@ void printMenu_Estado(){
 	else{
 		ST7735_DrawImage(0, 0, ST7735_WIDTH, ST7735_HEIGHT, (uint16_t*)POCA_AGUA);
 	}
+	printTime();
 }
 
 void printMenu_Start(){
@@ -994,6 +987,11 @@ void printCrearAlarma(uint8_t altura){
 			}
 		}
 	}
+}
+void printTime(){
+	char hora[6];
+	sprintf(hora,"%02d:%02d",sTime.Hours,sTime.Minutes);
+	ST7735_WriteString(92, 0, hora, Font_7x10, ST7735_BLACK, ST7735_WHITE);
 }
 void printOK(uint8_t altura){
 	ST7735_FillRectangleFast(5, 5+51*altura, ST7735_WIDTH-10, 48, ST7735_WHITE);
@@ -1240,8 +1238,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc)
 {
 	nextAlarma();
+	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, isTimeToTurnOn);
+	isTimeToTurnOn ^= isTimeToTurnOn;
 }
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
+#ifndef __DEBUG__
 	if (htim->Instance == TIM3){
 		pantalla = Estado;
 		update_screen = 1;__HAL_TIM_SET_COUNTER(&htim3, 0);
@@ -1253,6 +1254,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim){
 		}
 		__HAL_TIM_SET_COUNTER(&htim3, 0);
 	}
+#else
+	return;
+#endif
 }
 void nextAlarma(){
 	siguiente_alarma = (siguiente_alarma+1)%num_alarmas;
@@ -1261,15 +1265,11 @@ void nextAlarma(){
 
 	if(isTimeToTurnOn)
 	{
-		HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, 1);
-		isTimeToTurnOn = 0;
 		sAlarm.AlarmTime.Hours = alarmasON[siguiente_alarma].Hours;
 		sAlarm.AlarmTime.Minutes = alarmasON[siguiente_alarma].Minutes;
 	}
 	else
 	{
-		HAL_GPIO_WritePin(GPIOD,GPIO_PIN_15, 0);
-		isTimeToTurnOn = 1;
 		sAlarm.AlarmTime.Hours = alarmasOFF[siguiente_alarma].Hours;
 		sAlarm.AlarmTime.Minutes = alarmasOFF[siguiente_alarma].Minutes;
 	}
